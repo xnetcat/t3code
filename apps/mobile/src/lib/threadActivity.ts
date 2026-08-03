@@ -7,10 +7,13 @@ import type {
   TurnId,
   UserInputQuestion,
 } from "@t3tools/contracts";
+import { activeAgentRuns, deriveAgentRuns, type AgentRun } from "@t3tools/shared/agentRuns";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
+
+export type { AgentRun };
 
 export interface PendingApproval {
   readonly requestId: ApprovalRequestId;
@@ -1369,4 +1372,26 @@ export function buildThreadFeed(
   );
 
   return groupAdjacentActivities(entries);
+}
+
+export function deriveThreadAgentRuns(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<AgentRun> {
+  return deriveAgentRuns(
+    activities.map((activity) => ({
+      id: activity.id,
+      createdAt: activity.createdAt,
+      kind: activity.kind,
+      summary: activity.summary,
+      tone: activity.tone,
+      turnId: activity.turnId,
+      payload: activity.payload,
+    })),
+  );
+}
+
+export function deriveActiveThreadAgentRuns(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<AgentRun> {
+  return activeAgentRuns(deriveThreadAgentRuns(activities));
 }

@@ -21,7 +21,7 @@ import {
 } from "../lib/composerImages";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
-import { buildThreadFeed } from "../lib/threadActivity";
+import { buildThreadFeed, deriveThreadAgentRuns } from "../lib/threadActivity";
 import { appAtomRegistry } from "../state/atom-registry";
 import {
   appendComposerDraftAttachments,
@@ -91,6 +91,10 @@ export function useThreadComposerState() {
   );
   const selectedThreadFeed = useMemo(
     () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
+    [selectedThreadDetail],
+  );
+  const selectedThreadAgentRuns = useMemo(
+    () => (selectedThreadDetail ? deriveThreadAgentRuns(selectedThreadDetail.activities) : []),
     [selectedThreadDetail],
   );
 
@@ -291,6 +295,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
+    selectedThreadAgentRuns,
     selectedThreadQueueCount,
     activeWorkStartedAt,
     draftMessage,

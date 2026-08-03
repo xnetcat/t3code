@@ -30,7 +30,10 @@ import {
   workEntryIndicatesToolNeutralStatus,
   workEntryIndicatesToolSuccess,
   workLogEntryIsToolLike,
+  type AgentRun,
 } from "../../session-logic";
+import type { AgentRun as SharedAgentRun } from "@t3tools/shared/agentRuns";
+import { AgentRunCard } from "./AgentRunCard";
 import { type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import {
@@ -134,6 +137,8 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  agentRunsByActivityId: ReadonlyMap<string, SharedAgentRun>;
+  onOpenAgentRun: ((runId: string) => void) | undefined;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -152,6 +157,26 @@ const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_AGENT_RUNS: ReadonlyArray<AgentRun> = [];
+const EMPTY_AGENT_RUNS_BY_ACTIVITY = new Map<string, SharedAgentRun>();
+
+function buildAgentRunsByActivityId(
+  runs: ReadonlyArray<SharedAgentRun>,
+): ReadonlyMap<string, SharedAgentRun> {
+  if (runs.length === 0) {
+    return EMPTY_AGENT_RUNS_BY_ACTIVITY;
+  }
+  const map = new Map<string, SharedAgentRun>();
+  for (const run of runs) {
+    for (const activityId of run.sourceActivityIds) {
+      map.set(activityId, run);
+    }
+    for (const activityId of run.workActivityIds) {
+      map.set(activityId, run);
+    }
+  }
+  return map;
+}
 
 // ---------------------------------------------------------------------------
 // Props (public API)
@@ -163,6 +188,8 @@ interface MessagesTimelineProps {
   activeTurnStartedAt: string | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
+  agentRuns?: ReadonlyArray<AgentRun>;
+  onOpenAgentRun?: (runId: string) => void;
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
@@ -197,6 +224,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnStartedAt,
   listRef,
   timelineEntries,
+  agentRuns = EMPTY_AGENT_RUNS,
+  onOpenAgentRun,
   latestTurn,
   runningTurnId,
   turnDiffSummaryByAssistantMessageId,
@@ -415,6 +444,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [timelineViewportElement, rows.length]);
 
+  const agentRunsByActivityId = useMemo(() => buildAgentRunsByActivityId(agentRuns), [agentRuns]);
+
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
       timestampFormat,
@@ -425,6 +456,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      agentRunsByActivityId,
+      onOpenAgentRun,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -439,6 +472,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      agentRunsByActivityId,
+      onOpenAgentRun,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1014,10 +1049,44 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const assistantImages = row.message.attachments ?? [];
 
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
+        {assistantImages.length > 0 ? (
+          <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
+            {assistantImages.map((image) => (
+              <div
+                key={image.id}
+                className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
+              >
+                {image.previewUrl ? (
+                  <button
+                    type="button"
+                    className="h-full w-full cursor-zoom-in"
+                    aria-label={`Preview ${image.name}`}
+                    onClick={() => {
+                      const preview = buildExpandedImagePreview(assistantImages, image.id);
+                      if (!preview) return;
+                      ctx.onImageExpand(preview);
+                    }}
+                  >
+                    <img
+                      src={image.previewUrl}
+                      alt={image.name}
+                      className="block h-auto max-h-[220px] w-full object-cover"
+                    />
+                  </button>
+                ) : (
+                  <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
+                    {image.name}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : null}
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}
@@ -1149,11 +1218,34 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }: {
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
-  const { workspaceRoot } = use(TimelineRowCtx);
+  const { workspaceRoot, agentRunsByActivityId, onOpenAgentRun } = use(TimelineRowCtx);
   const nonEmptyEntries = useMemo(
     () => groupedEntries.filter((entry) => !workEntryIndicatesToolNeutralStatus(entry)),
     [groupedEntries],
   );
+  const rendered = useMemo(() => {
+    const seenRunIds = new Set<string>();
+    const nodes: Array<{
+      key: string;
+      kind: "run" | "work";
+      run?: SharedAgentRun;
+      workEntry?: (typeof nonEmptyEntries)[number];
+    }> = [];
+    for (const workEntry of nonEmptyEntries) {
+      const run = agentRunsByActivityId.get(workEntry.id);
+      if (run) {
+        if (seenRunIds.has(run.id)) {
+          continue;
+        }
+        seenRunIds.add(run.id);
+        nodes.push({ key: `run:${run.id}`, kind: "run", run });
+        continue;
+      }
+      nodes.push({ key: workEntry.id, kind: "work", workEntry });
+    }
+    return nodes;
+  }, [agentRunsByActivityId, nonEmptyEntries]);
+
   const onlyToolEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry));
   const groupLabel = onlyToolEntries
     ? nonEmptyEntries.length === 1
@@ -1161,7 +1253,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
       : `${nonEmptyEntries.length} tool calls`
     : "Work Log";
 
-  if (nonEmptyEntries.length === 0) return null;
+  if (rendered.length === 0) return null;
 
   return (
     <section className="-mx-1 space-y-0.5 px-1 py-0.5" aria-label={groupLabel}>
@@ -1170,14 +1262,23 @@ const WorkGroupSection = memo(function WorkGroupSection({
           {groupLabel}
         </p>
       )}
-      <div className="space-y-px">
-        {nonEmptyEntries.map((workEntry) => (
-          <SimpleWorkEntryRow
-            key={workEntry.id}
-            workEntry={workEntry}
-            workspaceRoot={workspaceRoot}
-          />
-        ))}
+      <div className="space-y-1.5">
+        {rendered.map((node) =>
+          node.kind === "run" && node.run ? (
+            <AgentRunCard
+              key={node.key}
+              run={node.run}
+              expanded={node.run.status === "running"}
+              onOpen={onOpenAgentRun}
+            />
+          ) : node.workEntry ? (
+            <SimpleWorkEntryRow
+              key={node.key}
+              workEntry={node.workEntry}
+              workspaceRoot={workspaceRoot}
+            />
+          ) : null,
+        )}
       </div>
     </section>
   );

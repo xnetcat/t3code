@@ -12,6 +12,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { activeAgentRuns, deriveAgentRuns, type AgentRun } from "@t3tools/shared/agentRuns";
 
 import type {
   ChatMessage,
@@ -21,6 +22,8 @@ import type {
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
+
+export type { AgentRun };
 
 export type ProviderPickerKind = ProviderDriverKind;
 
@@ -641,6 +644,28 @@ export function deriveWorkLogEntries(
     const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
     return Object.assign(rest, { sourceActivityKind: activityKind });
   });
+}
+
+export function deriveThreadAgentRuns(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<AgentRun> {
+  return deriveAgentRuns(
+    activities.map((activity) => ({
+      id: activity.id,
+      createdAt: activity.createdAt,
+      kind: activity.kind,
+      summary: activity.summary,
+      tone: activity.tone,
+      turnId: activity.turnId,
+      payload: activity.payload,
+    })),
+  );
+}
+
+export function deriveActiveThreadAgentRuns(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<AgentRun> {
+  return activeAgentRuns(deriveThreadAgentRuns(activities));
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {

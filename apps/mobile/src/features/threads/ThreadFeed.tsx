@@ -125,6 +125,7 @@ export interface ThreadFeedProps {
   readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  readonly agentRuns?: ReadonlyArray<import("@t3tools/shared/agentRuns").AgentRun>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
@@ -794,7 +795,7 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills"> & {
+  props: Pick<ThreadFeedProps, "environmentId" | "skills" | "agentRuns"> & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -984,6 +985,7 @@ function renderFeedEntry(
   return (
     <ThreadWorkLog
       activities={entry.activities}
+      agentRuns={props.agentRuns}
       copiedRowId={props.copiedRowId}
       expandedRows={props.expandedWorkRows}
       iconSubtleColor={iconSubtleColor}
@@ -1601,6 +1603,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: ThreadFeedEntry; index: number }) =>
       renderFeedEntry(info, {
         environmentId: props.environmentId,
+        agentRuns: props.agentRuns,
         copiedRowId,
         expandedWorkRows,
         terminalAssistantMessageIds,
@@ -1630,6 +1633,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       reviewCommentColors,
       reviewCommentBubbleWidth,
       userBubbleMaxWidth,
+      props.agentRuns,
       onCopyWorkRow,
       onMarkdownLinkPress,
       onPressImage,

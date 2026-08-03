@@ -82,6 +82,7 @@ import {
   findSidebarProposedPlan,
   findLatestProposedPlan,
   deriveWorkLogEntries,
+  deriveThreadAgentRuns,
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
@@ -207,6 +208,7 @@ import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { BackgroundTasksPanel } from "./chat/AgentRunCard";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -1862,6 +1864,10 @@ function ChatViewContent(props: ChatViewProps) {
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
+  const threadAgentRuns = useMemo(
+    () => deriveThreadAgentRuns(threadActivities),
+    [threadActivities],
+  );
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
@@ -5162,6 +5168,15 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
       />
+    ) : activeRightPanelSurface?.kind === "tasks" ? (
+      <BackgroundTasksPanel
+        runs={threadAgentRuns}
+        selectedRunId={activeRightPanelSurface.selectedRunId}
+        onSelectRun={(runId) => {
+          if (!activeThreadRef) return;
+          useRightPanelStore.getState().openTasks(activeThreadRef, runId);
+        }}
+      />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -5256,6 +5271,11 @@ function ChatViewContent(props: ChatViewProps) {
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
+                agentRuns={threadAgentRuns}
+                onOpenAgentRun={(runId) => {
+                  if (!activeThreadRef) return;
+                  useRightPanelStore.getState().openTasks(activeThreadRef, runId);
+                }}
                 latestTurn={activeLatestTurn}
                 runningTurnId={
                   activeThread.session?.status === "running"

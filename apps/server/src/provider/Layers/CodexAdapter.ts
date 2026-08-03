@@ -20,6 +20,7 @@ import {
   type ProviderUserInputAnswers,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
@@ -227,6 +228,11 @@ function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType 
   if (type.includes("mcp")) return "mcp_tool_call";
   if (type.includes("dynamic tool")) return "dynamic_tool_call";
   if (type.includes("collab")) return "collab_agent_tool_call";
+  // Codex emits lightweight sub-agent markers as `subAgentActivity`.
+  // Treat them as collaboration agent work so clients can group nested runs.
+  if (type.includes("sub agent") || type.includes("subagent")) {
+    return "collab_agent_tool_call";
+  }
   if (type.includes("web search")) return "web_search";
   if (type.includes("image")) return "image_view";
   if (type.includes("review entered")) return "review_entered";
@@ -261,6 +267,25 @@ function itemTitle(itemType: CanonicalItemType, item?: CodexLifecycleItem): stri
       return "Web search";
     case "image_view":
       return "Image view";
+    case "collab_agent_tool_call": {
+      if (item && typeof item === "object" && "type" in item) {
+        const record = item as Record<string, unknown>;
+        if (record.type === "subAgentActivity") {
+          const agentPath = typeof record.agentPath === "string" ? record.agentPath.trim() : "";
+          return agentPath.length > 0 ? `Subagent · ${agentPath}` : "Subagent activity";
+        }
+        if (record.type === "collabAgentToolCall") {
+          const tool = typeof record.tool === "string" ? record.tool.trim() : "";
+          if (tool === "spawnAgent") return "Spawned subagents";
+          if (tool === "sendInput") return "Sent input to subagent";
+          if (tool === "wait") return "Waiting on subagents";
+          if (tool === "closeAgent") return "Closed subagent";
+          if (tool === "resumeAgent") return "Resumed subagent";
+          return tool.length > 0 ? `Subagent · ${tool}` : "Subagent task";
+        }
+      }
+      return "Subagent task";
+    }
     case "error":
       return "Error";
     default:
@@ -492,6 +517,90 @@ function mapItemLifecycle(
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
   };
+}
+
+/**
+ * Mirror Codex collab / sub-agent items onto the shared `task.*` channel so
+ * AgentRun UI can treat Claude Task tool and Codex collab agents uniformly.
+ */
+function mapCollabItemToTaskEvents(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  lifecycle: "item.started" | "item.completed",
+): ReadonlyArray<ProviderRuntimeEvent> {
+  const payload =
+    readPayload(EffectCodexSchema.V2ItemStartedNotification, event.payload) ??
+    readPayload(EffectCodexSchema.V2ItemCompletedNotification, event.payload);
+  const item = payload?.item;
+  if (!item) {
+    return [];
+  }
+  const itemType = toCanonicalItemType(item.type);
+  if (itemType !== "collab_agent_tool_call") {
+    return [];
+  }
+
+  const itemRecord = item as Record<string, unknown>;
+  const taskId = RuntimeTaskId.make(
+    typeof itemRecord.id === "string" && itemRecord.id.trim().length > 0
+      ? itemRecord.id
+      : `codex-collab-${event.eventId}`,
+  );
+  const title = itemTitle(itemType, item) ?? "Subagent task";
+  const agentCount = Array.isArray(itemRecord.receiverThreadIds)
+    ? itemRecord.receiverThreadIds.length
+    : 0;
+  const agentsStates =
+    itemRecord.agentsStates && typeof itemRecord.agentsStates === "object"
+      ? (itemRecord.agentsStates as Record<string, { status?: string; message?: string }>)
+      : undefined;
+  const runningAgent = agentsStates
+    ? Object.values(agentsStates).find((state) => state?.status === "inProgress")
+    : undefined;
+  const base = runtimeEventBase(event, canonicalThreadId);
+
+  if (lifecycle === "item.started") {
+    return [
+      {
+        ...base,
+        type: "task.started",
+        payload: {
+          taskId,
+          description: title,
+          taskType: "Collab",
+        },
+      },
+      {
+        ...base,
+        type: "task.progress",
+        payload: {
+          taskId,
+          description: title,
+          summary:
+            agentCount > 0
+              ? `${agentCount} agent${agentCount === 1 ? "" : "s"}`
+              : runningAgent?.message?.trim() || title,
+          ...(runningAgent?.message ? { lastToolName: runningAgent.message } : {}),
+        },
+      },
+    ];
+  }
+
+  const failed =
+    itemRecord.status === "failed" ||
+    (agentsStates !== undefined &&
+      Object.values(agentsStates).some((state) => state?.status === "failed"));
+  return [
+    {
+      ...base,
+      type: "task.completed",
+      payload: {
+        taskId,
+        status: failed ? "failed" : "completed",
+        summary: title,
+      },
+    },
+  ];
 }
 
 function mapToRuntimeEvents(
@@ -836,7 +945,8 @@ function mapToRuntimeEvents(
 
   if (event.method === "item/started") {
     const started = mapItemLifecycle(event, canonicalThreadId, "item.started");
-    return started ? [started] : [];
+    const taskEvents = mapCollabItemToTaskEvents(event, canonicalThreadId, "item.started");
+    return started ? [started, ...taskEvents] : taskEvents;
   }
 
   if (event.method === "item/completed") {
@@ -862,7 +972,8 @@ function mapToRuntimeEvents(
       ];
     }
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
-    return completed ? [completed] : [];
+    const taskEvents = mapCollabItemToTaskEvents(event, canonicalThreadId, "item.completed");
+    return completed ? [completed, ...taskEvents] : taskEvents;
   }
 
   if (

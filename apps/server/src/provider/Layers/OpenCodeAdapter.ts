@@ -7,6 +7,7 @@ import {
   type ProviderSession,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   ThreadId,
   type ToolLifecycleItemType,
   TurnId,
@@ -204,12 +205,64 @@ function openCodeEventSessionTitle(event: OpenCodeSubscribedEvent): string | und
   return trimText(event.properties.info.title);
 }
 
+function openCodeSessionParentId(info: unknown): string | undefined {
+  const record =
+    info !== null && typeof info === "object" ? (info as Record<string, unknown>) : undefined;
+  if (!record) {
+    return undefined;
+  }
+  return (
+    trimText(typeof record.parentID === "string" ? record.parentID : undefined) ??
+    trimText(typeof record.parentId === "string" ? record.parentId : undefined)
+  );
+}
+
+function rememberOpenCodeChildSession(
+  context: OpenCodeSessionContext,
+  event: OpenCodeSubscribedEvent,
+): void {
+  if (event.type !== "session.updated") {
+    return;
+  }
+  const info =
+    "properties" in event && event.properties && typeof event.properties === "object"
+      ? (event.properties as { readonly info?: unknown }).info
+      : undefined;
+  const record =
+    info !== null && typeof info === "object" ? (info as Record<string, unknown>) : undefined;
+  if (!record) {
+    return;
+  }
+  const childId = trimText(typeof record.id === "string" ? record.id : undefined);
+  const parentId = openCodeSessionParentId(info);
+  if (!childId || parentId !== context.openCodeSessionId) {
+    return;
+  }
+  context.childSessionIds.add(childId);
+}
+
+function isOpenCodeSessionEventAccepted(
+  context: OpenCodeSessionContext,
+  payloadSessionId: string | undefined,
+): boolean {
+  if (!payloadSessionId) {
+    // Some early events omit sessionID; keep prior behavior for the parent stream.
+    return true;
+  }
+  if (payloadSessionId === context.openCodeSessionId) {
+    return true;
+  }
+  return context.childSessionIds.has(payloadSessionId);
+}
+
 interface OpenCodeSessionContext {
   session: ProviderSession;
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
   readonly directory: string;
   readonly openCodeSessionId: string;
+  /** Child sessions spawned by Task/subagent tools (parentID → this session). */
+  readonly childSessionIds: Set<string>;
   readonly pendingPermissions: Map<string, PermissionRequest>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
@@ -786,10 +839,16 @@ export function makeOpenCodeAdapter(
       context: OpenCodeSessionContext,
       event: OpenCodeSubscribedEvent,
     ) {
+      rememberOpenCodeChildSession(context, event);
+
       const payloadSessionId = openCodeEventSessionId(event);
-      if (payloadSessionId !== context.openCodeSessionId) {
+      if (!isOpenCodeSessionEventAccepted(context, payloadSessionId)) {
         return;
       }
+      const isChildSession =
+        typeof payloadSessionId === "string" &&
+        payloadSessionId !== context.openCodeSessionId &&
+        context.childSessionIds.has(payloadSessionId);
 
       const turnId = context.activeTurnId;
       yield* writeNativeEventBestEffort(context.session.threadId, {
@@ -806,6 +865,10 @@ export function makeOpenCodeAdapter(
 
       switch (event.type) {
         case "session.updated": {
+          // Child session metadata should not overwrite the parent thread title.
+          if (isChildSession) {
+            break;
+          }
           const title = openCodeEventSessionTitle(event);
           if (title) {
             yield* emit({
@@ -893,7 +956,7 @@ export function makeOpenCodeAdapter(
           context.partById.set(part.id, part);
           const messageRole = messageRoleForPart(context, part);
 
-          if (messageRole === "assistant") {
+          if (messageRole === "assistant" && !isChildSession) {
             yield* emitAssistantTextDelta(context, part, turnId, event);
           }
 
@@ -914,6 +977,9 @@ export function makeOpenCodeAdapter(
               data: {
                 tool: part.tool,
                 state: part.state,
+                ...(isChildSession && payloadSessionId
+                  ? { agentSessionId: payloadSessionId, parentSessionId: context.openCodeSessionId }
+                  : {}),
               },
             };
             const runtimeEvent: ProviderRuntimeEvent = {
@@ -934,6 +1000,48 @@ export function makeOpenCodeAdapter(
             };
             appendTurnItem(context, turnId, part);
             yield* emit(runtimeEvent);
+
+            if (itemType === "collab_agent_tool_call") {
+              const taskId = RuntimeTaskId.make(part.callID);
+              const taskBase = yield* buildEventBase({
+                threadId: context.session.threadId,
+                turnId,
+                itemId: part.callID,
+                createdAt: toolStateCreatedAt(part),
+                raw: event,
+              });
+              if (part.state.status === "pending") {
+                yield* emit({
+                  ...taskBase,
+                  type: "task.started",
+                  payload: {
+                    taskId,
+                    description: title ?? part.tool,
+                    taskType: "Task",
+                  },
+                });
+              } else if (part.state.status === "completed" || part.state.status === "error") {
+                yield* emit({
+                  ...taskBase,
+                  type: "task.completed",
+                  payload: {
+                    taskId,
+                    status: part.state.status === "error" ? "failed" : "completed",
+                    ...(detail ? { summary: detail } : title ? { summary: title } : {}),
+                  },
+                });
+              } else {
+                yield* emit({
+                  ...taskBase,
+                  type: "task.progress",
+                  payload: {
+                    taskId,
+                    description: title ?? part.tool,
+                    ...(detail ? { summary: detail } : {}),
+                  },
+                });
+              }
+            }
           }
           break;
         }
@@ -1374,6 +1482,7 @@ export function makeOpenCodeAdapter(
           server: started.server,
           directory,
           openCodeSessionId: started.openCodeSession.id,
+          childSessionIds: new Set(),
           pendingPermissions: new Map(),
           pendingQuestions: new Map(),
           partById: new Map(),

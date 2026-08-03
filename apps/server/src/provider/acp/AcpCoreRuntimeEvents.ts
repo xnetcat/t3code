@@ -44,7 +44,10 @@ function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonical
   }
 }
 
-function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
+function canonicalItemTypeFromAcpToolKind(
+  kind: string | undefined,
+  title?: string | undefined,
+): ToolLifecycleItemType {
   switch (kind) {
     case "execute":
       return "command_execution";
@@ -55,8 +58,19 @@ function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecyc
     case "search":
     case "fetch":
       return "web_search";
-    default:
+    default: {
+      const haystack = `${kind ?? ""} ${title ?? ""}`.toLowerCase();
+      if (
+        haystack.includes("agent") ||
+        haystack.includes("subagent") ||
+        haystack.includes("sub-agent") ||
+        haystack.includes("task") ||
+        haystack.includes("workflow")
+      ) {
+        return "collab_agent_tool_call";
+      }
       return "dynamic_tool_call";
+    }
   }
 }
 
@@ -177,7 +191,7 @@ export function makeAcpToolCallEvent(input: {
     turnId: input.turnId,
     itemId: RuntimeItemId.make(input.toolCall.toolCallId),
     payload: {
-      itemType: canonicalItemTypeFromAcpToolKind(input.toolCall.kind),
+      itemType: canonicalItemTypeFromAcpToolKind(input.toolCall.kind, input.toolCall.title),
       ...(runtimeStatus ? { status: runtimeStatus } : {}),
       ...(input.toolCall.title ? { title: input.toolCall.title } : {}),
       ...(input.toolCall.detail ? { detail: input.toolCall.detail } : {}),

@@ -14,7 +14,15 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
-export const RIGHT_PANEL_KINDS = ["plan", "diff", "files", "file", "preview", "terminal"] as const;
+export const RIGHT_PANEL_KINDS = [
+  "plan",
+  "diff",
+  "files",
+  "file",
+  "preview",
+  "terminal",
+  "tasks",
+] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type RightPanelSurface =
@@ -37,7 +45,8 @@ export type RightPanelSurface =
       revealLine: number | null;
       revealRequestId: number;
     }
-  | { id: "plan"; kind: "plan" };
+  | { id: "plan"; kind: "plan" }
+  | { id: "tasks"; kind: "tasks"; selectedRunId: string | null };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 7;
@@ -54,6 +63,7 @@ interface RightPanelStoreState {
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
+  openTasks: (ref: ScopedThreadRef, selectedRunId?: string | null) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
     surfaceId: string,
@@ -92,6 +102,8 @@ const singletonSurface = (
       return { id: "files", kind };
     case "plan":
       return { id: "plan", kind };
+    case "tasks":
+      return { id: "tasks", kind, selectedRunId: null };
   }
 };
 
@@ -291,6 +303,27 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
             upsertSurface(current, terminalSurface(terminalId)),
           ),
+        })),
+      openTasks: (ref, selectedRunId = null) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const existing = current.surfaces.find(
+              (surface): surface is Extract<RightPanelSurface, { kind: "tasks" }> =>
+                surface.kind === "tasks",
+            );
+            const surface: RightPanelSurface = {
+              id: "tasks",
+              kind: "tasks",
+              selectedRunId: selectedRunId ?? existing?.selectedRunId ?? null,
+            };
+            return {
+              isOpen: true,
+              activeSurfaceId: surface.id,
+              surfaces: existing
+                ? current.surfaces.map((entry) => (entry.id === "tasks" ? surface : entry))
+                : [...current.surfaces, surface],
+            };
+          }),
         })),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) => ({

@@ -117,6 +117,30 @@ describe("AcpCoreRuntimeEvents", () => {
     });
 
     expect(
+      makeAcpToolCallEvent({
+        stamp,
+        provider: ProviderDriverKind.make("cursor"),
+        threadId: "thread-1" as never,
+        turnId,
+        toolCall: {
+          toolCallId: "tool-agent-1",
+          kind: "other",
+          status: "inProgress",
+          title: "Task: explore (subagent)",
+          detail: "Survey the codebase",
+          data: { title: "Task: explore (subagent)" },
+        },
+        rawPayload: { sessionId: "session-1" },
+      }),
+    ).toMatchObject({
+      type: "item.updated",
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+      },
+    });
+
+    expect(
       makeAcpContentDeltaEvent({
         stamp,
         provider: ProviderDriverKind.make("cursor"),

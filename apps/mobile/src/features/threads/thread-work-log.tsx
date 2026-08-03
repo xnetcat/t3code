@@ -1,11 +1,13 @@
 import * as Haptics from "expo-haptics";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
 import { LayoutAnimation, Pressable, ScrollView, useColorScheme, View } from "react-native";
+import type { AgentRun } from "@t3tools/shared/agentRuns";
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
 import Animated, { FadeIn } from "react-native-reanimated";
+import { MobileAgentRunCard } from "./AgentRunCard";
 
 const WORK_LOG_LAYOUT_ANIMATION = {
   duration: 180,
@@ -79,6 +81,8 @@ function isFreshRow(createdAt: string): boolean {
 
 export function ThreadWorkLog(props: {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
+  readonly agentRuns?: ReadonlyArray<AgentRun>;
+  readonly onOpenAgentRun?: (runId: string) => void;
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly iconSubtleColor: import("react-native").ColorValue;
@@ -87,6 +91,12 @@ export function ThreadWorkLog(props: {
 }) {
   const colorScheme = useColorScheme();
   const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
+  const agentRunsByActivityId = new Map<string, AgentRun>();
+  for (const run of props.agentRuns ?? []) {
+    for (const id of run.sourceActivityIds) agentRunsByActivityId.set(id, run);
+    for (const id of run.workActivityIds) agentRunsByActivityId.set(id, run);
+  }
+  const seenRunIds = new Set<string>();
   const rows = props.activities
     .filter((activity) => !(activity.toolLike && activity.status === "neutral"))
     .map((activity) => ({ ...activity, detail: compactActivityDetail(activity.detail) }));
@@ -105,8 +115,24 @@ export function ThreadWorkLog(props: {
         </Text>
       ) : null}
 
-      <View className="gap-px">
+      <View className="gap-1.5">
         {rows.map((row) => {
+          const run = agentRunsByActivityId.get(row.id);
+          if (run) {
+            if (seenRunIds.has(run.id)) {
+              return null;
+            }
+            seenRunIds.add(run.id);
+            return (
+              <MobileAgentRunCard
+                key={`run:${run.id}`}
+                run={run}
+                expanded={run.status === "running"}
+                onPress={props.onOpenAgentRun}
+              />
+            );
+          }
+
           const expanded = props.expandedRows[row.id] ?? false;
           const canExpand = row.fullDetail !== null;
           const displayText = row.detail ? `${row.summary} ${row.detail}` : row.summary;
