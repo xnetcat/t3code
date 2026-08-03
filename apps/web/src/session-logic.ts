@@ -265,6 +265,19 @@ export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolea
   return true;
 }
 
+/** Keep agent/subagent rows visible even while their lifecycle status is still in-progress. */
+export function workEntryShouldRenderInTimeline(entry: WorkLogEntry): boolean {
+  if (!workEntryIndicatesToolNeutralStatus(entry)) {
+    return true;
+  }
+  if (entry.itemType === "collab_agent_tool_call") {
+    return true;
+  }
+  return (
+    entry.sourceActivityKind === "task.progress" || entry.sourceActivityKind === "task.completed"
+  );
+}
+
 export function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;

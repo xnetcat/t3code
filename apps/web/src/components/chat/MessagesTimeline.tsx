@@ -29,6 +29,7 @@ import {
   workEntryIndicatesToolFailure,
   workEntryIndicatesToolNeutralStatus,
   workEntryIndicatesToolSuccess,
+  workEntryShouldRenderInTimeline,
   workLogEntryIsToolLike,
   type AgentRun,
 } from "../../session-logic";
@@ -1220,7 +1221,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }) {
   const { workspaceRoot, agentRunsByActivityId, onOpenAgentRun } = use(TimelineRowCtx);
   const nonEmptyEntries = useMemo(
-    () => groupedEntries.filter((entry) => !workEntryIndicatesToolNeutralStatus(entry)),
+    () => groupedEntries.filter((entry) => workEntryShouldRenderInTimeline(entry)),
     [groupedEntries],
   );
   const rendered = useMemo(() => {
